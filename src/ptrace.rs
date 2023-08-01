@@ -1,6 +1,9 @@
 use anyhow::Result;
 use nix::sys::ptrace;
+use nix::sys::wait::waitpid;
 use nix::unistd::Pid;
+
+use crate::ProcMemRead;
 
 pub struct Ptrace(Pid);
 
@@ -8,23 +11,21 @@ impl Ptrace {
     pub fn new(pid: impl Into<Pid>) -> Result<Self> {
         let pid = pid.into();
         ptrace::attach(pid)?;
+        let _ = waitpid(pid, None)?;
         Ok(Ptrace(pid))
     }
+}
 
-    pub unsafe fn read<T: Copy>(&self, addr: *const T) -> Result<T> {
-        let addr = addr as usize;
-        let type_size = std::mem::size_of::<T>();
-
-        let tv = self.read_bytes(addr as *const u8, type_size)?;
-
-        let tv = unsafe {
-            let tv = &*tv.as_ptr().cast::<T>();
-            *tv
-        };
-        Ok(tv)
+impl Drop for Ptrace {
+    fn drop(&mut self) {
+        println!("called the drop");
+        let pid = self.0;
+        ptrace::detach(pid, None).expect("error occurred when detaching the process");
     }
+}
 
-    pub unsafe fn read_bytes(&self, addr: *const u8, len: usize) -> Result<Vec<u8>> {
+impl ProcMemRead for Ptrace {
+    unsafe fn read_bytes(&self, addr: *const u8, len: usize) -> Result<Vec<u8>> {
         let addr = addr as usize;
         let mut bv = Vec::new();
 
@@ -37,13 +38,5 @@ impl Ptrace {
 
         bv.truncate(len);
         Ok(bv)
-    }
-}
-
-impl Drop for Ptrace {
-    fn drop(&mut self) {
-        println!("called the drop");
-        let pid = self.0;
-        ptrace::detach(pid, None).expect("error occurred when detaching the process");
     }
 }

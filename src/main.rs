@@ -1,19 +1,24 @@
 #![feature(let_chains)]
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use goblin::elf::Elf;
-use nix::{sys::wait::waitpid, unistd::Pid};
+use nix::unistd::Pid;
 
 mod bindings;
 mod elf;
 mod memmap;
 mod ptrace;
+mod pvr;
 
 fn main() -> Result<()> {
     let mut args = std::env::args();
     let _ = args.next();
     let pid = args.next().ok_or(anyhow!("Pass me the PID"))?;
-    let pid = usize::from_str_radix(&pid, 10)?;
+    let pid = pid.parse::<usize>()?;
+    let pause = args
+        .next()
+        .ok_or(anyhow!("Do you want to pause the inferior process?"))?;
+    let pause = pause == "yes";
 
     let interp_path = std::fs::read_link(format!("/proc/{pid}/exe"))?;
     println!("interp_path: {interp_path:?}");
@@ -32,17 +37,17 @@ fn main() -> Result<()> {
 
     let runtime_addr = start + req_sym.st_value as usize;
     println!("runtime addr: {runtime_addr:x}");
-    let mut i = 0;
     loop {
-        i += 1;
         std::thread::sleep(std::time::Duration::new(0, 500_000));
-        let p = ptrace::Ptrace::new(Pid::from_raw(pid as i32))?;
-        let status = waitpid(Pid::from_raw(pid as i32), None)?;
-        println!("waitpid status {i}: {status:#?}");
+        let p: Box<dyn ProcMemRead> = if pause {
+            Box::new(ptrace::Ptrace::new(Pid::from_raw(pid as i32))?)
+        } else {
+            Box::new(pvr::Pvr::new(Pid::from_raw(pid as i32))?)
+        };
         unsafe {
             // let preinit = std::ptr::addr_of!(runtime.preinitialized);
 
-            let runtime = p.read(runtime_addr as *const bindings::_PyRuntimeState)?;
+            let runtime = read_type(&*p, runtime_addr as *const bindings::_PyRuntimeState)?;
 
             let current_thread_addr =
                 runtime.gilstate.tstate_current._value as *const bindings::PyThreadState;
@@ -50,28 +55,28 @@ fn main() -> Result<()> {
             if current_thread_addr.is_null() {
                 continue;
             }
-            let current_thread = p.read(current_thread_addr)?;
+            let current_thread = read_type(&*p, current_thread_addr)?;
 
             let cframe_addr = current_thread.cframe;
             println!("cframe: {cframe_addr:#x?}");
             if cframe_addr.is_null() {
                 continue;
             }
-            let cframe = p.read(cframe_addr)?;
+            let cframe = read_type(&*p, cframe_addr)?;
 
             let iframe_addr = cframe.current_frame;
             println!("iframe: {iframe_addr:#x?}");
             if iframe_addr.is_null() {
                 continue;
             }
-            let iframe = p.read(iframe_addr)?;
+            let iframe = read_type(&*p, iframe_addr)?;
 
             let func_addr = iframe.f_func;
             println!("func: {func_addr:#x?}");
             if func_addr.is_null() {
                 continue;
             }
-            let func = p.read(func_addr)?;
+            let func = read_type(&*p, func_addr)?;
 
             let qualname_addr = func.func_qualname;
             let qualname_addr = qualname_addr as *const bindings::PyASCIIObject;
@@ -79,7 +84,7 @@ fn main() -> Result<()> {
             if qualname_addr.is_null() {
                 continue;
             }
-            let qualname = p.read(qualname_addr)?;
+            let qualname = read_type(&*p, qualname_addr)?;
 
             let qualname_len = qualname.length as usize;
             let qualname_data_addr = qualname_addr.add(1);
@@ -87,4 +92,21 @@ fn main() -> Result<()> {
             println!("qualname_data: {}", std::str::from_utf8(&qualname_data)?);
         }
     }
+}
+
+trait ProcMemRead {
+    unsafe fn read_bytes(&self, addr: *const u8, len: usize) -> Result<Vec<u8>>;
+}
+
+unsafe fn read_type<T: Copy>(reader: &dyn ProcMemRead, addr: *const T) -> Result<T> {
+    let addr = addr as usize;
+    let type_size = std::mem::size_of::<T>();
+
+    let tv = reader.read_bytes(addr as *const u8, type_size)?;
+
+    let tv = unsafe {
+        let tv = &*tv.as_ptr().cast::<T>();
+        *tv
+    };
+    Ok(tv)
 }

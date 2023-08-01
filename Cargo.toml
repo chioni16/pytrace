@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.72"
 goblin = "0.7.1"
-nix = { version = "0.26.2", features = ["process"] }
+nix = { version = "0.26.2", features = ["process", "uio"] }
 
 [build-dependencies]
 bindgen = "0.64.0"
