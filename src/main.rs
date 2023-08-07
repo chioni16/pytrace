@@ -29,7 +29,6 @@ fn main() -> Result<()> {
     let req_sym = elf::get_dynamic_symbol(&elf, req_sym).unwrap();
 
     let (start, _end) = memmap::get_line_from_memmap(pid, &interp_path)?.unwrap();
-    let start = 0x5588451b6000;
 
     let runtime_addr = start + req_sym.st_value as usize;
     loop {
