@@ -26,11 +26,10 @@ fn main() -> Result<()> {
     let elf = Elf::parse(&file)?;
 
     let req_sym = "_PyRuntime";
-    let req_sym = elf::get_dynamic_symbol(&elf, req_sym).unwrap();
+    let req_sym = elf::get_symbol(&elf, req_sym).or_else(|| elf::get_dynamic_symbol(&elf, req_sym)).unwrap();
 
-    let (start, _end) = memmap::get_line_from_memmap(pid, &interp_path)?.unwrap();
+    let runtime_addr = req_sym.st_value as usize;
 
-    let runtime_addr = start + req_sym.st_value as usize;
     loop {
         std::thread::sleep(std::time::Duration::new(0, 500_000));
         let p: Box<dyn ProcMemRead> = if pause {
