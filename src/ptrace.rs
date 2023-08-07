@@ -18,7 +18,6 @@ impl Ptrace {
 
 impl Drop for Ptrace {
     fn drop(&mut self) {
-        println!("called the drop");
         let pid = self.0;
         ptrace::detach(pid, None).expect("error occurred when detaching the process");
     }
